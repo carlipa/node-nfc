@@ -160,6 +160,12 @@ namespace {
         void Execute(const AsyncProgressWorker::ExecutionProgress& progress) {
             while(baton->run && nfc_initiator_select_passive_target(baton->pnd, nmMifare, NULL, 0, &baton->nt) > 0) {
                 baton->claimed = true;
+
+                int size_t;
+                char* uid;
+                getUid(&uid, &size_t);
+                progress.Send(uid, size_t);
+
                 tag = new NFCCard();
                 if(baton->run) ReadTag(tag);
                 baton->claimed = false;
@@ -181,6 +187,24 @@ namespace {
 
         #define MAX_DEVICE_COUNT 16
         #define MAX_FRAME_LENGTH 264
+
+        void getUid(char** uid, int* size) {
+          unsigned long cc, n;
+          char *bp;
+          const char *sp;
+
+          cc = baton->nt.nti.nai.szUidLen;
+          if (cc > sizeof baton->nt.nti.nai.abtUid) cc = sizeof baton->nt.nti.nai.abtUid;
+          char _uid[3 * sizeof baton->nt.nti.nai.abtUid];
+          bzero(_uid, sizeof _uid);
+
+          for (n = 0, bp = _uid, sp = ""; n < cc; n++, bp += strlen(bp), sp = ":") {
+              snprintf(bp, sizeof _uid - (bp - _uid), "%s%02x", sp, baton->nt.nti.nai.abtUid[n]);
+          }
+
+          *uid = _uid;
+          *size = 3 * sizeof baton->nt.nti.nai.abtUid;
+        }
 
         void ReadTag(NFCCard *tag) {
             unsigned long cc, n;
@@ -343,18 +367,26 @@ namespace {
             }
         }
 
-        void HandleProgressCallback(const char *_tag, size_t size) {
+        void HandleProgressCallback(const char *data, size_t size) {
             Nan::HandleScope scope;
 
-            Local<Object> object = Nan::New<Object>();
-            tag->AddToNodeObject(object);
-            delete tag;
-            tag = NULL;
-
             Local<Value> argv[2];
-            argv[0] = Nan::New("read").ToLocalChecked();
-            argv[1] = object;
-            
+
+            if (size > 0) {
+              // If there is a size, it's the tag's uid
+              argv[0] = Nan::New("read:uid").ToLocalChecked();
+              argv[1] = Nan::New(data).ToLocalChecked();
+            } else {
+              // If there is no size, it's the whole tag
+              Local<Object> object = Nan::New<Object>();
+              tag->AddToNodeObject(object);
+              delete tag;
+              tag = NULL;
+
+              argv[0] = Nan::New("read").ToLocalChecked();
+              argv[1] = object;
+            }
+
             Local<Object> self = GetFromPersistent("self").As<Object>();
             Nan::MakeCallback(self, "emit", 2, argv);
         }
